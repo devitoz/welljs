@@ -174,9 +174,9 @@
 			return this;
 		},
 
-		exist: function (moduleName) {
+		exist: function (mod) {
 			return _.find(this.modules, function (module) {
-				return module.name === moduleName;
+				return _.isString(mod) ? module.name === mod : module.name === mod.name;
 			}, this);
 		},
 

@@ -86,15 +86,17 @@ benderDefine('Bender:Views', function (app) {
 			waitOnQueueComplete: function (modules, next) {
 				var missing = {};
 
-				if (_.isEmpty(missing)) {
-					_.each(modules, function (mod) {
-						if (_.isString(this.getTemplate(mod)))
-							missing[mod.name] = _.clone(mod);
-						else
-							mod.isComplete = true;
-					}, this);
-				}
+				//поиск модулей со статусом isComplete
+				_.each(modules, function (mod) {
+					if (!mod.isComplete)
+						missing[mod.name] = _.clone(mod);
+//					if (_.isString(this.getTemplate(mod)))
+//						missing[mod.name] = _.clone(mod);
+//					else
+//						mod.isComplete = true;
+				}, this);
 
+				if (_.isEmpty(missing)) return;
 				app.Events.on('MODULE_COMPLETED', function (module) {
 					if (!missing[module.name])
 						return;
@@ -108,20 +110,29 @@ benderDefine('Bender:Views', function (app) {
 
 			},
 
-			tryToRender: function (action, params) {
-				var page = app.Modules.getModule(action.module);
+			tryToRender: function (pageName, params) {
+//
+//				if (!config.actions['not-found'])
+//					config.actions['not-found'] = 'Bender:Public:NotFound';
+
+
+				//layout выбранный или по-умаолчанию Main
+				//not-found аналогично
+
+
+				var page = app.Modules.getModule(pageName);
 				var self = this;
 
 				// если страница еще  не загружена, то ожидается загрузка модуля загрузки,
 				// всех зависимостей в т.ч. шаблонов, и после этого делается еще одна попытка рендера
 				if (!page || !page.isComplete) {
 					this.showOverlay();
-					return app.Modules.require([action.module], function (modules, queue) {
+					return app.Modules.require([pageName], function (modules, queue) {
 						self.waitOnQueueComplete(modules, function () {
-							self.tryToRender(action, params);
+							self.tryToRender(pageName, params);
 						});
 					}, function () {
-						app.Router.go404();
+						app.Router.go('/#not-found');
 					});
 				}
 
