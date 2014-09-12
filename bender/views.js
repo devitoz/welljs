@@ -29,30 +29,30 @@ benderDefine('Bender:Views', function (app) {
 				return this;
 			},
 
+			getConfigParam: function (name) {
+				return this.config[name];
+			},
+
 			getPartials: function (module) {
-				var mod = (typeof module === 'string') ? this.getModule(module) : module;
-				if (!mod) return false;
-				return mod.getConfigParam('partials') || [];
+				if (module) {
+					var mod = _.isString(module) ? this.getModule(module) : module;
+					return mod.getConfigParam('partials') || [];
+				}
 			},
 
 			getTemplate: function (module) {
-				var mod = (typeof module === 'string') ? this.getModule(module) : module;
-				if (!mod) return false;
-				var name = mod.getConfigParam('template');
-				return app.Templates.get(name) || name;
+				if (module) {
+					var mod = _.isString(module) ? this.getModule(module) : module;
+					var name = mod.getConfigParam('template');
+					return app.Templates.get(name) || name;
+				}
 			},
 
 			onModuleDefined: function (module) {
 				if (module.isView) {
-					/// есть шаблон или нет
 					this.complete(module);
 					this.set(module);
 				}
-				return this;
-			},
-
-			getLayout: function (module) {
-				return this.getModule(module.getConfigParam('layout'));
 			},
 
 			isCurrentLayout: function (viewName) {
@@ -76,68 +76,107 @@ benderDefine('Bender:Views', function (app) {
 					});
 				}, this);
 
-				if (!_.isEmpty(templates)) {
+				if (_.isEmpty(templates)) {
+					module.isComplete = true;
+					app.Events.trigger('MODULE_COMPLETED', module);
+				}
+				//если есть шаблоны, то заргужаются
+				else {
 					app.Templates.load(templates, function () {
+						module.isComplete = true;
 						app.Events.trigger('MODULE_COMPLETED', module);
 					});
 				}
 			},
 
-			waitOnQueueComplete: function (modules, next) {
-				var missing = {};
-
-				//поиск модулей со статусом isComplete
+			getIncomplete: function (modules) {
+				var res = [];
 				_.each(modules, function (mod) {
 					if (!mod.isComplete)
-						missing[mod.name] = _.clone(mod);
-//					if (_.isString(this.getTemplate(mod)))
-//						missing[mod.name] = _.clone(mod);
-//					else
-//						mod.isComplete = true;
-				}, this);
-
-				if (_.isEmpty(missing)) return;
-				app.Events.on('MODULE_COMPLETED', function (module) {
-					if (!missing[module.name])
-						return;
-					delete missing[module.name];
-					if (_.isEmpty(missing)) {
-						app.Events.off('MODULE_COMPLETED');
-						module.isComplete = true;
-						return next.call(this)
-					}
-				}, this);
-
+						res.push(mod.name);
+				});
+				return res;
 			},
 
-			tryToRender: function (pageName, params) {
-//
-//				if (!config.actions['not-found'])
-//					config.actions['not-found'] = 'Bender:Public:NotFound';
+			waitOnQueueComplete: function (modules, next) {
+				var incomplete = this.getIncomplete(modules);
+				if (_.isEmpty(incomplete)) return;
+				app.Events.on('MODULE_COMPLETED', function (module) {
+					var index = incomplete.indexOf(module.name);
+					//проверка на то, из текущей ли очереди загружен модуль
+					if (index !== -1) {
+						incomplete.splice(index, 1);
+						if (!incomplete.length) {
+							app.Events.off('MODULE_COMPLETED');
+							return next.call(this)
+						}
+					}
+				}, this);
+			},
 
+			tryToRender: function (action, params) {
+				var page, layout, self = this, o, layoutName, pageName;
 
-				//layout выбранный или по-умаолчанию Main
-				//not-found аналогично
+				this.showOverlay();
 
+				if (_.isString(action)) {
+					layoutName = this.getConfigParam('layoutModule') || 'Bender:Public:Layout';
+					pageName = action;
+				}
+				//не определена рутером
+				else if (!action) {
+					layoutName = this.getConfigParam('layoutModule') || 'Bender:Public:Layout';
+					pageName = this.getConfigParam('notFoundModule') || 'Bender:Public:NotFound';
+				}
+				else {
+					layoutName = action.layout || 'Bender:Public:Layout';
+					pageName = action.page;
+				}
 
-				var page = app.Modules.getModule(pageName);
-				var self = this;
+				layout = this.getModule(layoutName);
+				//загрузка лэйаута
+				if (!layout) {
+					return app.Modules.require([layoutName], function (modules, queue) {
+						self.waitOnQueueComplete(modules, function () {
+							self.tryToRender(action, params);
+						});
+					});
+				}
+				//если лэйаут загружен, но не загружены его зависимости, то ожидание всех зависимостей
+				else if (!layout.isComplete) {
+					(o = {})[layout.name] = layout;
+					return this.waitOnQueueComplete(o, function () {
+						self.tryToRender(action, params);
+					});
+				}
 
-				// если страница еще  не загружена, то ожидается загрузка модуля загрузки,
-				// всех зависимостей в т.ч. шаблонов, и после этого делается еще одна попытка рендера
-				if (!page || !page.isComplete) {
-					this.showOverlay();
+				page = this.getModule(pageName);
+				if (!page) {
 					return app.Modules.require([pageName], function (modules, queue) {
 						self.waitOnQueueComplete(modules, function () {
-							self.tryToRender(pageName, params);
+							self.tryToRender(action, params);
 						});
 					}, function () {
-						app.Router.go('/#not-found');
+						if (!self.getModule('Bender:Public:NotFound')) {
+							return app.Modules.require(['Bender:Public:NotFound'], function (modules, queue) {
+								self.waitOnQueueComplete(modules, function () {
+									self.tryToRender('Bender:Public:NotFound', params);
+								});
+							});
+						}
+						app.Router.go('not-found');
+					});
+				}
+				//если страница загружена, но не загружены её зависимости, то ожидание всех зависимостей
+				else if (!page.isComplete) {
+					(o = {})[page.name] = page;
+					return this.waitOnQueueComplete(o, function () {
+						self.tryToRender(action, params);
 					});
 				}
 
 				//когда загружены все данные, можно отрендерить лэйаут и страницу
-				this.renderLayout(this.getLayout(page), params);
+				this.renderLayout(layout, params);
 				this.renderPage(page, params);
 				this.hideOverlay();
 				return this;
@@ -176,6 +215,8 @@ benderDefine('Bender:Views', function (app) {
 
 			initialize: function (module, options) {
 				_.isString(module) && (module = this.getModule(module));
+				if (!module)
+					 throw 'View module not found';
 				var template = this.getTemplate(module);
 				var viewName = module.name;
 				var view = this.initialized[viewName] = new (this.get(viewName))(_.extend({
